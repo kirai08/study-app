@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>最強勉強アプリ 完全版</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body { font-family: -apple-system; background:#f0f2f5; margin:0; }
+.container { background:white; padding:20px; margin:15px; border-radius:20px; }
+button { padding:10px; margin:5px; border-radius:10px; border:none; background:#4CAF50; color:white; }
+#calendar { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+.day { padding:10px; background:#eee; border-radius:10px; min-height:60px; }
+.today { background:#4CAF50; color:white; }
+.hasPlan { border:2px solid orange; }
+.done { background:#90CAF9; }
+</style>
+</head>
+
+<body>
+
+<div class="container">
+<h1>📚 勉強アプリ</h1>
+
+<select id="subject"></select>
+<input id="newSubject" placeholder="教科追加">
+<button onclick="addSubject()">追加</button>
+<button onclick="removeSubject()">削除</button><br><br>
+
+<input id="pages" placeholder="ページ数">
+<input id="time" placeholder="1ページ分（分）"><br><br>
+
+<button onclick="start()">スタート</button>
+<button onclick="finish()">終わり</button>
+
+<h2 id="status"></h2>
+<div id="timer">0:00</div>
+</div>
+
+<div class="container">
+<h2>📊 グラフ</h2>
+<button onclick="renderAdvancedChart('day')">日</button>
+<button onclick="renderAdvancedChart('month')">月</button>
+<canvas id="studyChart"></canvas>
+</div>
+
+<div class="container">
+<h2>📊 予定 vs 実績</h2>
+<canvas id="compareChart"></canvas>
+<div id="achievement"></div>
+</div>
+
+<div class="container">
+<h2>📚 教科合計</h2>
+<select id="multiSubjects" multiple></select>
+<button onclick="calculateSelected()">合計</button>
+<div id="selectedTotal"></div>
+</div>
+
+<div class="container">
+<h2>📅 予定</h2>
+<input type="date" id="datePicker">
+<select id="planSubject"></select>
+<input id="planPages" placeholder="ページ">
+<input id="planTime" placeholder="分">
+<button onclick="addPlan()">追加</button>
+<div id="planList"></div>
+</div>
+
+<div class="container">
+<h2>📅 カレンダー</h2>
+<button onclick="changeMonth(-1)">←</button>
+<span id="monthLabel"></span>
+<button onclick="changeMonth(1)">→</button>
+<div id="calendar"></div>
+</div>
+
+<script>
+let defaultSubjects=["国語①","国語②","数学①","数学②","英語①","英語②","理科①","理科②","社会①","社会②"];
+let subjects=[],studyData={},plans={};
+let chart,compareChart;
+
+// 初期化
+window.onload=()=>{
+  subjects=JSON.parse(localStorage.getItem("subjects"))||[...defaultSubjects];
+  studyData=JSON.parse(localStorage.getItem("studyData"))||{};
+  plans=JSON.parse(localStorage.getItem("plans"))||{};
+  renderSubjects();
+  renderChart();
+  renderCalendar();
+};
+
+// 教科
+function renderSubjects(){
+  subject.innerHTML=multiSubjects.innerHTML=planSubject.innerHTML="";
+  subjects.forEach(s=>{
+    subject.add(new Option(s));
+    multiSubjects.add(new Option(s));
+    planSubject.add(new Option(s));
+  });
+}
+
+function addSubject(){
+  if(!newSubject.value)return;
+  subjects.push(newSubject.value);
+  localStorage.setItem("subjects",JSON.stringify(subjects));
+  renderSubjects();
+}
+
+function removeSubject(){
+  if(defaultSubjects.includes(subject.value))return alert("削除不可");
+  if(!confirm(subject.value+"削除する？"))return;
+  subjects=subjects.filter(s=>s!==subject.value);
+  localStorage.setItem("subjects",JSON.stringify(subjects));
+  renderSubjects();
+}
+
+// 勉強
+let subjectName="",currentPage=1,timePerPage=0,remainingTime=0,interval,isBreak=false,overtime=0,totalPages=0;
+
+function start(){
+  Notification.requestPermission();
+  subjectName=subject.value;
+  totalPages=Number(pages.value);
+  timePerPage=Number(time.value)*60;
+  currentPage=1;overtime=0;
+  nextPage();
+}
+
+function nextPage(){
+  if(currentPage>totalPages)return alert("完了");
+  isBreak=false;
+  remainingTime=timePerPage-overtime;
+  status.innerText=subjectName+" "+currentPage+"ページ";
+  clearInterval(interval);
+  interval=setInterval(updateTimer,1000);
+}
+
+function finish(){
+  if(!isBreak && remainingTime>0){
+    isBreak=true; status.innerText="休憩";
+  }else{
+    currentPage++; nextPage();
+  }
+}
+
+function updateTimer(){
+  remainingTime--;
+  let today=new Date().toISOString().split("T")[0];
+
+  if(!studyData[today])studyData[today]={};
+  if(!studyData[today][subjectName])studyData[today][subjectName]=0;
+  studyData[today][subjectName]++;
+
+  localStorage.setItem("studyData",JSON.stringify(studyData));
+
+  timer.innerText=Math.floor(Math.abs(remainingTime)/60)+":"+String(Math.abs(remainingTime)%60).padStart(2,"0");
+
+  renderChart();
+
+  if(isBreak && remainingTime<=0){
+    new Notification("次！");
+    currentPage++; overtime=0; nextPage();
+  }
+  if(!isBreak && remainingTime<=0){
+    overtime=Math.abs(remainingTime);
+  }
+}
+
+// グラフ
+function renderChart(){
+  let labels=Object.keys(studyData);
+  let data=labels.map(d=>{
+    let sum=0; for(let s in studyData[d]) sum+=studyData[d][s];
+    return Math.floor(sum/60);
+  });
+
+  if(chart)chart.destroy();
+  chart=new Chart(studyChart,{type:"line",data:{labels,datasets:[{data}]}});
+
+  renderCompareChart();
+}
+
+// 予定vs実績
+function renderCompareChart(){
+  let today=datePicker.value||new Date().toISOString().split("T")[0];
+
+  let planned=0,actual=0;
+
+  if(plans[today]){
+    plans[today].forEach(p=>planned+=Number(p.time));
+  }
+
+  if(studyData[today]){
+    for(let s in studyData[today]) actual+=studyData[today][s]/60;
+  }
+
+  if(compareChart)compareChart.destroy();
+  compareChart=new Chart(compareChartCanvas(),{
+    type:"bar",
+    data:{
+      labels:["予定","実績"],
+      datasets:[{data:[planned,actual]}]
+    }
+  });
+
+  let rate=planned?Math.floor((actual/planned)*100):0;
+  achievement.innerText="達成率："+rate+"%";
+}
+
+function compareChartCanvas(){
+  return document.getElementById("compareChart");
+}
+
+// 教科合計
+function calculateSelected(){
+  let sel=[...multiSubjects.selectedOptions].map(o=>o.value);
+  let total=0;
+  for(let d in studyData){
+    sel.forEach(s=>{ if(studyData[d][s]) total+=studyData[d][s]; });
+  }
+  selectedTotal.innerText="合計："+Math.floor(total/60)+"分";
+}
+
+// 予定
+function addPlan(){
+  let d=datePicker.value;
+  if(!d)return;
+  if(!plans[d])plans[d]=[];
+  plans[d].push({subject:planSubject.value,pages:planPages.value,time:planTime.value,done:false});
+  localStorage.setItem("plans",JSON.stringify(plans));
+  showPlans(d); renderCalendar();
+}
+
+function showPlans(d){
+  planList.innerHTML="";
+  if(!plans[d])return;
+
+  plans[d].forEach((p,i)=>{
+    planList.innerHTML+=`
+      <div>
+        <input type="checkbox" ${p.done?"checked":""} onchange="toggleDone('${d}',${i})">
+        ${p.subject} ${p.pages}p ${p.time}分
+        <button onclick="deletePlan('${d}',${i})">削除</button>
+      </div>
+    `;
+  });
+
+  showActual(d);
+  renderCompareChart();
+}
+
+function toggleDone(d,i){
+  plans[d][i].done=!plans[d][i].done;
+  localStorage.setItem("plans",JSON.stringify(plans));
+}
+
+function deletePlan(d,i){
+  if(!confirm(plans[d][i].subject+"削除する？"))return;
+  plans[d].splice(i,1);
+  localStorage.setItem("plans",JSON.stringify(plans));
+  showPlans(d); renderCalendar();
+}
+
+// 実績
+function showActual(d){
+  if(!studyData[d])return;
+  planList.innerHTML+="<hr>実績<br>";
+  for(let s in studyData[d]){
+    planList.innerHTML+=s+" "+Math.floor(studyData[d][s]/60)+"分<br>";
+  }
+}
+
+// カレンダー
+let currentDate=new Date();
+
+function renderCalendar(){
+  calendar.innerHTML="";
+  let y=currentDate.getFullYear(),m=currentDate.getMonth();
+  monthLabel.innerText=y+"年"+(m+1)+"月";
+
+  let first=new Date(y,m,1).getDay();
+  let last=new Date(y,m+1,0).getDate();
+
+  for(let i=0;i<first;i++) calendar.innerHTML+="<div></div>";
+
+  for(let d=1;d<=last;d++){
+    let ds=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    let cls="day";
+    if(plans[ds])cls+=" hasPlan";
+
+    calendar.innerHTML+=`<div class="${cls}" onclick="selectDate('${ds}')">${d}</div>`;
+  }
+}
+
+function changeMonth(n){
+  currentDate.setMonth(currentDate.getMonth()+n);
+  renderCalendar();
+}
+
+function selectDate(d){
+  datePicker.value=d;
+  showPlans(d);
+}
+</script>
+
+</body>
+</html>
